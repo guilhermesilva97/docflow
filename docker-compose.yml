@@ -1,0 +1,215 @@
+name: docflow
+
+x-blob: &blob-connection "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+
+x-llm: &llm-env
+  Llm__BaseUrl: ${LLM_BASE_URL:-}
+  Llm__ApiKey: ${LLM_API_KEY:-ollama}
+  Llm__Model: ${LLM_MODEL:-qwen2.5:7b}
+  Llm__Temperature: ${LLM_TEMPERATURE:-}
+  Llm__ReasoningEffort: ${LLM_REASONING_EFFORT:-}
+
+x-dotnet-service: &dotnet-service
+  restart: on-failure
+  mem_limit: 256m
+  depends_on:
+    sqlserver:
+      condition: service_healthy
+    rabbitmq:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+    azurite:
+      condition: service_healthy
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${SQL_PASSWORD:-DocFlow!2026}
+      MSSQL_MEMORY_LIMIT_MB: "1280"
+    mem_limit: 2g
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -b -Q 'SELECT 1' -o /dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    mem_limit: 512m
+    ports:
+      - "8282:15672"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/5672"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  kafka:
+    image: apache/kafka:3.9.1
+    mem_limit: 768m
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_HEAP_OPTS: -Xmx256m -Xms256m
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --loose
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10000"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: runtime
+      args:
+        PROJECT: DocFlow.Api
+    environment:
+      ConnectionStrings__DocFlow: Server=sqlserver;Database=DocFlow;User Id=sa;Password=${SQL_PASSWORD:-DocFlow!2026};TrustServerCertificate=True
+      RabbitMq__Host: rabbitmq
+      Kafka__BootstrapServers: kafka:9092
+      BlobStorage__ConnectionString: *blob-connection
+      Workflow__ConfidenceThreshold: ${CONFIDENCE_THRESHOLD:-0.8}
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ok <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  extraction:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: runtime
+      args:
+        PROJECT: DocFlow.Extraction.Worker
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      azurite:
+        condition: service_healthy
+    environment:
+      <<: *llm-env
+      RabbitMq__Host: rabbitmq
+      BlobStorage__ConnectionString: *blob-connection
+
+  validation:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: runtime
+      args:
+        PROJECT: DocFlow.Validation.Worker
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RabbitMq__Host: rabbitmq
+
+  audit:
+    <<: *dotnet-service
+    build:
+      context: .
+      target: runtime
+      args:
+        PROJECT: DocFlow.Audit.Worker
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Audit: Server=sqlserver;Database=DocFlowAudit;User Id=sa;Password=${SQL_PASSWORD:-DocFlow!2026};TrustServerCertificate=True
+      Kafka__BootstrapServers: kafka:9092
+
+  web:
+    build:
+      context: ./web
+      target: runtime
+    mem_limit: 64m
+    ports:
+      - "8280:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    volumes:
+      - ollama-models:/root/.ollama
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${LLM_MODEL:-qwen2.5:7b}"]
+    depends_on:
+      - ollama
+
+  dotnet-test:
+    build:
+      context: .
+      target: test
+    profiles: [test]
+    environment:
+      DOCFLOW_SQL: sqlserver
+      DOCFLOW_RABBIT: rabbitmq
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  web-test:
+    build:
+      context: ./web
+      target: test
+    profiles: [test]
+
+  evals:
+    build:
+      context: .
+      target: runtime
+      args:
+        PROJECT: DocFlow.Evals
+    profiles: [evals]
+    environment:
+      <<: *llm-env
+      EVALS_MIN_ACCURACY: ${EVALS_MIN_ACCURACY:-0.85}
+
+volumes:
+  sqlserver-data:
+  ollama-models:

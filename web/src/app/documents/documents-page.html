@@ -1,0 +1,118 @@
+<section class="grid-2">
+  <div
+    class="card dropzone"
+    [class.dropzone--active]="dragging()"
+    (dragover)="$event.preventDefault(); dragging.set(true)"
+    (dragleave)="dragging.set(false)"
+    (drop)="onDrop($event)"
+  >
+    <h2 class="card__title">Enviar notas fiscais</h2>
+    <p class="muted">Arraste PDFs para cá ou escolha os arquivos.</p>
+    <label class="button">
+      Escolher PDFs
+      <input
+        type="file"
+        accept="application/pdf"
+        multiple
+        hidden
+        (change)="onFileSelected($event)"
+      />
+    </label>
+  </div>
+
+  <div class="card">
+    <h2 class="card__title">Gerar nota fictícia</h2>
+    <p class="muted">Cria um PDF com gabarito conhecido para testar o fluxo.</p>
+    <div class="inline-form">
+      <select [(ngModel)]="template" aria-label="Layout">
+        <option [ngValue]="null">Layout aleatório</option>
+        <option ngValue="Classic">Clássico</option>
+        <option ngValue="Modern">Moderno</option>
+        <option ngValue="Compact">Compacto</option>
+      </select>
+      <select [(ngModel)]="scenario" aria-label="Cenário">
+        <option ngValue="Valid">Nota válida</option>
+        <option ngValue="InvalidCnpj">CNPJ inválido</option>
+        <option ngValue="WrongTotal">Total errado</option>
+      </select>
+      <button class="button" type="button" [disabled]="busy()" (click)="generateSample()">
+        Gerar
+      </button>
+    </div>
+  </div>
+</section>
+
+@if (message(); as text) {
+  <p class="notice" role="status">{{ text }}</p>
+}
+
+<section class="grid-main">
+  <div class="card">
+    <div class="toolbar">
+      <h2 class="card__title">Documentos</h2>
+      <div class="chips" role="tablist">
+        @for (status of filters; track status) {
+          <button
+            type="button"
+            class="chip"
+            [class.chip--active]="filter() === status"
+            (click)="filter.set(status)"
+          >
+            {{ filterLabel(status) }} <strong>{{ counts().get(status) ?? 0 }}</strong>
+          </button>
+        }
+      </div>
+    </div>
+
+    @if (visible().length === 0) {
+      <p class="muted">Nenhum documento por aqui ainda.</p>
+    } @else {
+      <div class="table-wrapper">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Arquivo</th>
+              <th>Emitente</th>
+              <th class="num">Total</th>
+              <th class="num">Confiança</th>
+              <th>Status</th>
+              <th>Atualizado</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (document of visible(); track document.id) {
+              <tr>
+                <td>
+                  <a [routerLink]="['/documents', document.id]">{{ document.fileName }}</a>
+                </td>
+                <td>{{ document.issuerName ?? '—' }}</td>
+                <td class="num">{{ formatBrl(document.total) }}</td>
+                <td class="num">{{ formatPercent(document.confidence) }}</td>
+                <td><app-status-badge [status]="document.status" /></td>
+                <td>{{ document.updatedAt | date: 'dd/MM HH:mm:ss' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+
+  <aside class="card">
+    <h2 class="card__title">Eventos ao vivo</h2>
+    @if (live.feed().length === 0) {
+      <p class="muted">As mudanças de status aparecem aqui em tempo real.</p>
+    }
+    <ol class="feed">
+      @for (change of live.feed(); track $index) {
+        <li class="feed__item">
+          <app-status-badge [status]="change.status" />
+          <div>
+            <strong>{{ change.fileName }}</strong>
+            <p class="muted">{{ change.detail }}</p>
+          </div>
+        </li>
+      }
+    </ol>
+  </aside>
+</section>

@@ -1,0 +1,25 @@
+<div class="layout">
+  <header class="header">
+    <a routerLink="/" class="brand">
+      <h1>DocFlow</h1>
+      <span class="muted"
+        >Notas fiscais lidas por IA, validadas por regras e revisadas por pessoas.</span
+      >
+    </a>
+    <span class="live" [attr.data-state]="live.connection()">
+      <span class="live__dot" aria-hidden="true"></span>
+      @switch (live.connection()) {
+        @case ('online') {
+          ao vivo
+        }
+        @case ('offline') {
+          reconectando
+        }
+        @default {
+          conectando
+        }
+      }
+    </span>
+  </header>
+  <router-outlet />
+</div>

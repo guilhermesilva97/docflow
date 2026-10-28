@@ -1,0 +1,7 @@
+**/bin
+**/obj
+web
+docs
+.github
+.git
+*.md

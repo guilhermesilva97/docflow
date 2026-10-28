@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_evals:
+        description: Rodar evals de extração com LLM real
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET (format + unit + integração)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testes com SQL Server e RabbitMQ reais
+        run: docker compose --profile test run --rm --build dotnet-test
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose logs sqlserver rabbitmq
+      - name: Derrubar ambiente
+        if: always()
+        run: docker compose --profile test down -v
+
+  web:
+    name: Angular (prettier + testes + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testes
+        run: docker compose --profile test run --rm --build --no-deps web-test
+
+  smoke:
+    name: Smoke test do fluxo completo
+    runs-on: ubuntu-latest
+    needs: [dotnet, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Subir stack
+        run: docker compose up -d --build --wait
+      - name: Fluxo de ponta a ponta
+        run: sh scripts/smoke.sh http://localhost:8280
+      - name: Eventos chegaram na auditoria via Kafka
+        run: |
+          count=$(docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
+            -S localhost -U sa -P 'DocFlow!2026' -C -h -1 \
+            -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM DocFlowAudit.dbo.AuditEntries" | tr -d '[:space:]')
+          echo "eventos auditados: $count"
+          test "$count" -gt 0
+      - name: Nenhuma mensagem em filas de erro
+        run: |
+          docker compose exec -T rabbitmq rabbitmqctl list_queues name messages \
+            | awk '/_error/ && $2 > 0 { print; found=1 } END { exit found }'
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose logs
+      - name: Derrubar ambiente
+        if: always()
+        run: docker compose down -v
+
+  evals:
+    name: Evals de extração (LLM real)
+    runs-on: ubuntu-latest
+    needs: [dotnet]
+    if: github.event_name == 'workflow_dispatch' && inputs.run_evals
+    env:
+      LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.openai.com/v1' }}
+      LLM_MODEL: ${{ vars.LLM_MODEL || 'gpt-4o-mini' }}
+      LLM_TEMPERATURE: ${{ vars.LLM_TEMPERATURE }}
+      LLM_REASONING_EFFORT: ${{ vars.LLM_REASONING_EFFORT }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar segredo
+        run: test -n "$LLM_API_KEY" || (echo "Configure o secret LLM_API_KEY" && exit 1)
+      - name: Rodar evals
+        run: docker compose --profile evals run --rm --build evals
+
+  publish:
+    name: Publicar imagens no GHCR
+    runs-on: ubuntu-latest
+    needs: [smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - service: api
+            project: DocFlow.Api
+          - service: extraction
+            project: DocFlow.Extraction.Worker
+          - service: validation
+            project: DocFlow.Validation.Worker
+          - service: audit
+            project: DocFlow.Audit.Worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Nome da imagem em minúsculas
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          build-args: PROJECT=${{ matrix.project }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  publish-web:
+    name: Publicar imagem do front no GHCR
+    runs-on: ubuntu-latest
+    needs: [smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Nome da imagem em minúsculas
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/web" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          target: runtime
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+  deploy-azure:
+    name: Deploy no Azure Container Apps
+    runs-on: ubuntu-latest
+    needs: [publish, publish-web]
+    if: vars.AZURE_DEPLOY_ENABLED == 'true'
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        service: [api, extraction, validation, audit, web]
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Atualizar imagem do container app
+        run: |
+          az containerapp update \
+            --name "docflow-${{ matrix.service }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.service }}:${{ github.sha }}"

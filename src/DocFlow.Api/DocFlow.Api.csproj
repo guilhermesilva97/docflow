@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="..\DocFlow.Infrastructure\DocFlow.Infrastructure.csproj" />
+    <ProjectReference Include="..\DocFlow.Samples\DocFlow.Samples.csproj" />
+  </ItemGroup>
+</Project>

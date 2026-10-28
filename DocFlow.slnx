@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DocFlow.Api/DocFlow.Api.csproj" />
+    <Project Path="src/DocFlow.Application/DocFlow.Application.csproj" />
+    <Project Path="src/DocFlow.Audit.Worker/DocFlow.Audit.Worker.csproj" />
+    <Project Path="src/DocFlow.Contracts/DocFlow.Contracts.csproj" />
+    <Project Path="src/DocFlow.Domain/DocFlow.Domain.csproj" />
+    <Project Path="src/DocFlow.Evals/DocFlow.Evals.csproj" />
+    <Project Path="src/DocFlow.Extraction.Worker/DocFlow.Extraction.Worker.csproj" />
+    <Project Path="src/DocFlow.Infrastructure/DocFlow.Infrastructure.csproj" />
+    <Project Path="src/DocFlow.Samples/DocFlow.Samples.csproj" />
+    <Project Path="src/DocFlow.Validation.Worker/DocFlow.Validation.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DocFlow.IntegrationTests/DocFlow.IntegrationTests.csproj" />
+    <Project Path="tests/DocFlow.UnitTests/DocFlow.UnitTests.csproj" />
+  </Folder>
+</Solution>

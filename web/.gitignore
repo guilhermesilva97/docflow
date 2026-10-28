@@ -1,0 +1,8 @@
+/dist
+/tmp
+/out-tsc
+/node_modules
+/.angular
+npm-debug.log
+.vscode/
+.idea/

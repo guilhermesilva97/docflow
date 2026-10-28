@@ -1,0 +1,153 @@
+<a routerLink="/" class="back">← Documentos</a>
+
+@if (document(); as doc) {
+  <header class="review-header">
+    <div>
+      <h2>{{ doc.fileName }}</h2>
+      <p class="muted">
+        Extraído via {{ doc.extractionMethod ?? '—' }} · confiança
+        {{ formatPercent(doc.confidence) }}
+        @if (doc.reviewedBy) {
+          · revisado por {{ doc.reviewedBy }}
+        }
+      </p>
+    </div>
+    <app-status-badge [status]="doc.status" />
+  </header>
+
+  <section class="review">
+    <div class="card pdf">
+      <iframe [src]="pdfUrl()" title="Documento original"></iframe>
+    </div>
+
+    <div class="review__side">
+      @if (doc.issues.length > 0) {
+        <div class="card alert">
+          <h3 class="card__title">Problemas encontrados</h3>
+          <ul>
+            @for (issue of doc.issues; track issue.code + issue.message) {
+              <li>{{ issue.message }}</li>
+            }
+          </ul>
+        </div>
+      }
+
+      @if (processing()) {
+        <div class="card notice">
+          O documento ainda está em processamento ({{ statusLabel(doc.status) }}).
+        </div>
+      }
+
+      <form class="card fields" (ngSubmit)="approve()">
+        <h3 class="card__title">Campos extraídos</h3>
+        <fieldset [disabled]="!editable() || saving()">
+          <div class="form-grid">
+            <label>Emitente <input name="issuerName" [(ngModel)]="draft.issuerName" /></label>
+            <label
+              >CNPJ do emitente <input name="issuerCnpj" [(ngModel)]="draft.issuerCnpj"
+            /></label>
+            <label
+              >Destinatário <input name="recipientName" [(ngModel)]="draft.recipientName"
+            /></label>
+            <label
+              >CNPJ do destinatário <input name="recipientCnpj" [(ngModel)]="draft.recipientCnpj"
+            /></label>
+            <label>Número <input name="number" [(ngModel)]="draft.number" /></label>
+            <label
+              >Emissão <input type="date" name="issueDate" [(ngModel)]="draft.issueDate"
+            /></label>
+            <label
+              >Vencimento <input type="date" name="dueDate" [(ngModel)]="draft.dueDate"
+            /></label>
+            <label
+              >Total <input type="number" step="0.01" name="total" [(ngModel)]="draft.total"
+            /></label>
+          </div>
+
+          <div class="items">
+            <div class="toolbar">
+              <h4>Itens</h4>
+              <span class="muted">Soma: {{ formatBrl(itemsSum()) }}</span>
+            </div>
+            @for (item of draft.items; track $index; let i = $index) {
+              <div class="item-row">
+                <input
+                  [name]="'description' + i"
+                  [(ngModel)]="item.description"
+                  placeholder="Descrição"
+                />
+                <input
+                  type="number"
+                  [name]="'quantity' + i"
+                  [(ngModel)]="item.quantity"
+                  aria-label="Quantidade"
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  [name]="'unitPrice' + i"
+                  [(ngModel)]="item.unitPrice"
+                  aria-label="Preço unitário"
+                />
+                <button
+                  type="button"
+                  class="icon-button"
+                  (click)="removeItem(i)"
+                  aria-label="Remover item"
+                >
+                  ×
+                </button>
+              </div>
+            }
+            <div class="inline-form">
+              <button type="button" class="button button--ghost" (click)="addItem()">
+                Adicionar item
+              </button>
+              <button type="button" class="button button--ghost" (click)="useItemsSum()">
+                Usar soma como total
+              </button>
+            </div>
+          </div>
+
+          @if (errors().length > 0) {
+            <ul class="errors">
+              @for (error of errors(); track error) {
+                <li>{{ error }}</li>
+              }
+            </ul>
+          }
+
+          @if (editable()) {
+            <label>Revisor <input name="reviewer" [(ngModel)]="reviewer" /></label>
+            <div class="actions">
+              <button class="button" type="submit">Corrigir e aprovar</button>
+              <input
+                name="rejectReason"
+                [(ngModel)]="rejectReason"
+                placeholder="Motivo da rejeição"
+              />
+              <button class="button button--danger" type="button" (click)="reject()">
+                Rejeitar
+              </button>
+            </div>
+          }
+        </fieldset>
+      </form>
+
+      <div class="card">
+        <h3 class="card__title">Linha do tempo</h3>
+        <ol class="timeline">
+          @for (entry of doc.history; track $index) {
+            <li>
+              <app-status-badge [status]="entry.status" />
+              <span>{{ entry.detail }}</span>
+              <time class="muted">{{ entry.at | date: 'dd/MM HH:mm:ss' }}</time>
+            </li>
+          }
+        </ol>
+      </div>
+    </div>
+  </section>
+} @else {
+  <p class="muted">Carregando...</p>
+}
